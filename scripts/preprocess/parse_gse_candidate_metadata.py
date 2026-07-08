@@ -18,6 +18,7 @@ if __name__ == '__main__':
 	gse_candidates_file = join(data_dir, 'mouse_GSE_candidates_3t3.txt.gz')
 	gse_candidates_sample_metadata_file = join(data_dir, f'mouse_gene_perturbation_GSE_candidates_sample_metadata_3t3.hdf5')
 	gse_candidates_sample_info_file = join(data_dir, f'mouse_gene_perturbation_GSE_candidates_sample_title_characteristics_3t3.txt.gz')
+	gsm_sra_pipeline_file = join(data_dir, 'mouse_gsm_sra_list_for_pipeline_3t3.tsv')
 	sra_gsm_table = join(data_dir, 'SRA_GSM_accessions.txt.gz')
 
 	# Parse the association between GSE ID and the index of its metadata string in the original hdf5 file
@@ -55,8 +56,9 @@ if __name__ == '__main__':
 	#     and SRA IDs (these could either be SRR (run) IDs or SRX (experiment) IDs)
 	xmlns = '{http://www.ncbi.nlm.nih.gov/geo/info/MINiML}'
 	sample_counts = Counter()
-	with h5py.File(gse_xml_hdf5_path, 'r') as hdf5_file, h5py.File(gse_candidates_sample_metadata_file, 'w') as out_file, gzip.open(gse_candidates_sample_info_file, 'wt') as sample_out:
+	with h5py.File(gse_xml_hdf5_path, 'r') as hdf5_file, h5py.File(gse_candidates_sample_metadata_file, 'w') as out_file, gzip.open(gse_candidates_sample_info_file, 'wt') as sample_out, open(gsm_sra_pipeline_file, 'wt') as pipeline_out:
 		sample_out.write('gse_id\tgsm_id\tsample_title\tsample_characteristics\n')
+		pipeline_out.write('gsm_id\tsra_ids\n')
 		str_datatype = h5py.string_dtype(encoding='utf-8')
 		str_dataset = out_file.create_dataset('GSE_sample_info_strings', shape=(len(gse_id_list),), dtype=str_datatype, compression='gzip')
 		for i, gse_id in enumerate(gse_id_list):
@@ -93,6 +95,7 @@ if __name__ == '__main__':
 							sample_info_strings.append(f'{sample_gsm_id}\t{sample_title}\t{sample_srr_list}')
 							sample_char = '; '.join(sample_char) if len(sample_char)>0 else 'NA'
 							sample_out.write(f'{gse_id}\t{sample_gsm_id}\t{sample_title}\t{sample_char}\n')
+							pipeline_out.write(f'{sample_gsm_id}\t{sample_srr_list}\n')
 							sample_counts['samples_passed'] += 1
 						# If the GSM ID is not in the SRR table, parse the SRX ID from the sample node information
 						# Each SRX comprises one or more SRR runs.
@@ -101,10 +104,12 @@ if __name__ == '__main__':
 							if len(sample_relations) > 0:
 								relation_types = [e.attrib['type'] for e in sample_relations]
 								if 'SRA' in relation_types:
+									sample_title = sample_node.find(f'{xmlns}Title').text.strip().replace(' ', '_').replace('\n', '').replace('\t', '')
 									sample_srx_id = [e for e in sample_relations if e.attrib['type'] == 'SRA'][0].attrib['target'].split('term=')[-1]
 									sample_info_strings.append(f'{sample_gsm_id}\t{sample_title}\t{sample_srx_id}')
 									sample_char = '; '.join(sample_char) if len(sample_char)>0 else 'NA'
 									sample_out.write(f'{gse_id}\t{sample_gsm_id}\t{sample_title}\t{sample_char}\n')
+									pipeline_out.write(f'{sample_gsm_id}\t{sample_srx_id}\n')
 									sample_counts['samples_passed'] += 1
 								else:
 									sample_counts['sra_id_not_found'] += 1

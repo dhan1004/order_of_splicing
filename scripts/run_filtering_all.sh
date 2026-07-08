@@ -5,15 +5,15 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=48G 
 #SBATCH --time=36:00:00
-#SBATCH --output=out_files/order_genome_match_%A_%a.out
-#SBATCH --error=out_files/order_genome_match_%A_%a.err
+#SBATCH --output=/users/dhan30/scratch/data/out_files/order_genome_match_%A_%a.out
+#SBATCH --error=/users/dhan30/scratch/data/out_files/order_genome_match_%A_%a.err
 #SBATCH --partition=batch
 
 # Configuration
-INPUT_LIST_TSV="/users/dhan30/scratch/splicing_order/data/gsm_sra_list_paired_only.tsv"
+INPUT_LIST_TSV="data/mouse_gsm_sra_list_for_pipeline_3t3.tsv"
 THREADS=16 
-BASE_OUT_DIR="/users/dhan30/scratch/splicing_order/results"
-PIPELINE_SCRIPT="/users/dhan30/scratch/splicing_order/scripts/order_gse_filtering.sh"
+BASE_OUT_DIR="/users/dhan30/scratch/data/results"
+PIPELINE_SCRIPT="/users/dhan30/splicing_order/scripts/order_gse_filtering.sh"
 
 # Job Info
 printf "$(date +'%d/%b/%Y %H:%M:%S') | Running on node: $(hostname)\n"

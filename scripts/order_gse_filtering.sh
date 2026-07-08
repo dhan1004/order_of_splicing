@@ -44,9 +44,9 @@ informative_pairs_bam="${out_dir}/${gsm_id}_informative_pairs.bam"
 splicing_order_output="${out_dir}/${gsm_id}_pairwise_splicing_order.tsv"
 
 # Reference files
-reference_genome_dir="/users/dhan30/reference/hg38"
-reference_genome_fasta="/users/dhan30/reference/hg38.fa"
-intron_bed_file="/users/dhan30/reference/hg38.gencode.basic.v43.introns.bed.gz"
+reference_genome_dir="/users/dhan30/reference/mm39"
+reference_genome_fasta="/users/dhan30/reference/mm39.fa"
+intron_bed_file="/users/dhan30/reference/mm39.gencode.basic.vM36.introns.bed.gz"
 
 # Script directory
 SCRIPT_DIR="/users/dhan30/splicing_order/scripts"
