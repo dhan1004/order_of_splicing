@@ -139,7 +139,7 @@ gene_summary <- df |>
     .groups = "drop"
   ) |>
   mutate(pct_sig = n_sig / n_pairs) |>
-  arrange(desc(n_sig))]
+  arrange(desc(n_sig))
 
 # Outputs
 

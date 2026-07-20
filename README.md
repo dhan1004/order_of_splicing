@@ -62,7 +62,7 @@ Columns include: `chr`, `gene_id`, `intron1_start`, `intron1_end`, `intron2_star
 
 ```
 python scripts/merge_and_split.py \
-    --results-dir results/ \
+    --results-dir /users/dhan30/scratch/data/results \
     --output-dir  results/merged \
     --n-chunks    100 \
     --min-reads   10 \
@@ -78,9 +78,9 @@ Use `splicing_order_pooled.tsv` as input to `filter_significant_pairs.R` to
 get tsv of significant, strongly biased intron pairs:
 
 ```
-Rscript filter_significant_pairs.R \
-    --input  merged/splicing_order_pooled.tsv \
-    --outdir merged/
+Rscript scripts/filter_significant_pairs.R \
+    --input  results/merged/splicing_order_pooled.tsv \
+    --outdir results/merged/
 ```
 
 Output:
