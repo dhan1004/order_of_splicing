@@ -41,6 +41,7 @@ OUT_DIR     <- "figures/ortho"
 START_ROW   <- 1L
 END_ROW     <- NA_integer_
 COMMON_HAS_HEADER <- FALSE
+BLURB_FILE <- NULL
 # Column names of the intron TSVs that identify the gene.
 # Leave NULL to auto-detect (gene_symbol, human_symbol, mouse_symbol, gene_id, ...).
 HUMAN_SYMBOL_COL <- NULL
@@ -66,6 +67,7 @@ if (!is.null(v <- getarg("--mouse-symbol-col"))) MOUSE_SYMBOL_COL <- v
 if (!is.null(v <- getarg("--format")))   OUT_FORMAT <- tolower(v)
 if (!is.null(v <- getarg("--per-png")))  PER_FILE   <- as.integer(v)
 if (!is.null(v <- getarg("--dpi")))      DPI        <- as.integer(v)
+if (!is.null(v <- getarg("--blurbs")))  BLURB_FILE <- v   # add in CLI block
 if (!OUT_FORMAT %in% c("png", "pdf"))
   stop("--format must be 'png' or 'pdf' (got '", OUT_FORMAT, "')")
 
@@ -127,6 +129,26 @@ mouse_raw <- prep(mouse_raw, MOUSE_SYMBOL_COL)
 human_by_gene <- split(human_raw, human_raw$gene_symbol)
 mouse_by_gene <- split(mouse_raw, mouse_raw$gene_symbol)
 
+# ── Gene-function blurbs (optional) ──────────────────────────────────────────
+blurb_lookup <- function(symbol, species) ""   # default no-op
+if (!is.null(BLURB_FILE) && file.exists(BLURB_FILE)) {
+  bl <- read.delim(BLURB_FILE, stringsAsFactors = FALSE)
+  bl$key <- paste(tolower(bl$species), toupper(bl$symbol), sep = "|")
+  bmap <- setNames(bl$blurb, bl$key)
+  blurb_lookup <- function(symbol, species) {
+    v <- bmap[[paste(tolower(species), toupper(symbol), sep = "|")]]
+    if (is.null(v) || is.na(v)) "" else v
+  }
+}
+
+# wrap long text so it fits the panel; trim to ~1-2 lines
+wrap_blurb <- function(txt, width = 90, max_lines = 2) {
+  if (!nzchar(txt)) return("")
+  w <- strwrap(txt, width = width)
+  if (length(w) > max_lines) { w <- w[seq_len(max_lines)]; w[max_lines] <- paste0(w[max_lines], " \u2026") }
+  paste(w, collapse = "\n")
+}
+
 # ── Load common-genes list, slice to this task's range ────────────────────────
 common <- read.delim(COMMON_FILE, header = COMMON_HAS_HEADER,
                      stringsAsFactors = FALSE, check.names = FALSE)
@@ -153,7 +175,7 @@ message(sprintf("Plotting pairs %d..%d of %d", START_ROW, END_ROW, n_total))
 # Reconstructs the exon/intron backbone from intron coordinates and draws a
 # significance-coloured arc per informative pair.
 # =============================================================================
-build_gene_panel <- function(gdf, gene_name, species_label) {
+build_gene_panel <- function(gdf, gene_name, species_label, blurb="") {
 
   if (is.null(gdf) || nrow(gdf) == 0) {
     return(
@@ -233,7 +255,9 @@ build_gene_panel <- function(gdf, gene_name, species_label) {
                     ylim = c(-0.6, 1.0), clip = "off") +
     scale_x_continuous(labels = function(x) paste0(round(x / 1e3, 1), " kb"),
                        expand = c(0, 0)) +
-    labs(title = paste0(species_label, ": ", gene_name), x = NULL, y = NULL) +
+    labs(title = paste0(species_label, ": ", gene_name), 
+      subtitle = wrap_blurb(blurb, width = 180),
+      x = NULL, y = NULL) +
     theme_classic(base_size = 10) +
     theme(
       axis.line.y  = element_blank(),
@@ -242,7 +266,9 @@ build_gene_panel <- function(gdf, gene_name, species_label) {
       axis.line.x  = element_line(colour = "grey70", linewidth = 0.4),
       axis.text.x  = element_text(colour = "grey40", size = 7),
       plot.title   = element_text(face = "bold", size = 10, hjust = 0),
-      plot.margin  = margin(6, 12, 4, 12)
+      plot.margin  = margin(6, 12, 4, 12),
+      plot.subtitle = element_text(size = 6.5, colour = "grey35",
+                                   lineheight = 0.95, hjust = 0)
     )
 }
 
@@ -269,8 +295,8 @@ build_pair_panel <- function(hs, ms) {
   mdf <- mouse_by_gene[[ms]]
   if (is.null(hdf) && is.null(mdf)) return(NULL)   # signal: skip
 
-  p_mouse <- build_gene_panel(mdf, ms, "Mouse")
-  p_human <- build_gene_panel(hdf, hs, "Human")
+  p_mouse <- build_gene_panel(mdf, ms, "Mouse", blurb_lookup(ms, "mouse"))
+  p_human <- build_gene_panel(hdf, hs, "Human", blurb_lookup(hs, "human"))
 
   (p_mouse / p_human) +
     plot_layout(heights = c(1, 1)) +
@@ -313,7 +339,7 @@ if (OUT_FORMAT == "pdf") {
   per <- max(1L, PER_FILE)
   n_files <- ceiling(n_ok / per)
   # Per-pair panel height in inches; total canvas grows with rows.
-  pair_h <- 3.0
+  pair_h <- 3.4
   fig_w  <- 10
   message(sprintf("Writing %d PNG(s), up to %d pairs each (%d pairs, %d skipped).",
                   n_files, per, n_ok, n_skip))

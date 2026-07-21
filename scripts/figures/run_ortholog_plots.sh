@@ -38,8 +38,9 @@ set -euo pipefail
 COMMON_TSV=/users/dhan30/splicing_order/results/ortholog/ortholog_matched_genes.tsv
 HUMAN_TSV=/users/dhan30/splicing_order/results/ortholog/human_subset_pairs.tsv
 MOUSE_TSV=/users/dhan30/splicing_order/results/ortholog/mouse_subset_pairs.tsv
-SCRIPT=/users/dhan30/splicing_order/scripts/supp/viz_ortholog_splicing.R
+SCRIPT=/users/dhan30/splicing_order/scripts/figures/viz_ortholog_splicing.R
 OUT_DIR=/users/dhan30/splicing_order/figures/ortholog
+BLURB_TSV=/users/dhan30/splicing_order/results/ortholog/gene_blurbs.tsv
 
 CHUNK=50       # pairs handled per task
 FORMAT=png     # png (grid) or pdf (multi-page)
@@ -66,6 +67,7 @@ Rscript "$SCRIPT" \
   --common "$COMMON_TSV" \
   --human  "$HUMAN_TSV" \
   --mouse  "$MOUSE_TSV" \
+  --blurbs "$BLURB_TSV" \
   --outdir "$OUT_DIR" \
   --start  "$START" \
   --end    "$END" \
