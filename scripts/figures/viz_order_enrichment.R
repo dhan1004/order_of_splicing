@@ -33,10 +33,11 @@
 #   gene_summary.tsv
 #
 # Usage:
-#   Rscript viz_order_enrichment.R \
-#       --input  /path/to/splicing_order_pooled.tsv \
-#       --outdir ./figures \
-#       --gene-bed /path/to/gencode_genes.bed
+# Rscript scripts/figures/viz_order_enrichment.R \
+#     --input  results/mouse/splicing_order_pooled.tsv \
+#     --outdir figures/mouse \
+#     --gene-bed /users/dhan30/reference/mm39.gencode.basic.vM36.genes.bed \
+#     --species mouse
 # =============================================================================
 
 suppressPackageStartupMessages({
@@ -65,12 +66,19 @@ option_list <- list(
   make_option("--effect-threshold", type = "double",  default = 0.25),
   make_option("--top-n",            type = "integer", default = 30),
   make_option("--gene-bed",         type = "character", default = NULL,
-              help = "6-col BED for coordinate-based gene symbol mapping")
+              help = "6-col BED for coordinate-based gene symbol mapping"),
+  make_option("--species", default = "human", help = "human or mouse")
 )
 
 opt <- parse_args(OptionParser(option_list = option_list))
 if (is.null(opt$input)) stop("--input is required.")
 dir.create(opt$outdir, showWarnings = FALSE, recursive = TRUE)
+
+orgdb_name <- if (opt$species == "mouse") "org.Mm.eg.db" else "org.Hs.eg.db"
+if (!requireNamespace(orgdb_name, quietly = TRUE))
+  stop("Install ", orgdb_name)
+suppressPackageStartupMessages(library(orgdb_name, character.only = TRUE))
+ORGDB <- get(orgdb_name)
 
 # --------------------------------------------------------------------------- #
 # Helpers
@@ -211,13 +219,13 @@ do_orgdb_mapping <- function(df) {
   if (id_type == "SYMBOL") return(setNames(all_ids, all_ids))
   if (id_type == "ENSEMBLTRANS") {
     ensg <- tryCatch(suppressMessages(
-      AnnotationDbi::mapIds(org.Hs.eg.db, keys = all_ids,
+      AnnotationDbi::mapIds(ORGDB, keys = all_ids,
                             column = "ENSEMBL", keytype = "ENSEMBLTRANS",
                             multiVals = "first")),
       error = function(e) NULL)
     if (is.null(ensg)) return(NULL)
     sym <- tryCatch(suppressMessages(
-      AnnotationDbi::mapIds(org.Hs.eg.db, keys = na.omit(unique(as.character(ensg))),
+      AnnotationDbi::mapIds(ORGDB, keys = na.omit(unique(as.character(ensg))),
                             column = "SYMBOL", keytype = "ENSEMBL",
                             multiVals = "first")),
       error = function(e) NULL)
@@ -225,7 +233,7 @@ do_orgdb_mapping <- function(df) {
     setNames(as.character(sym[as.character(ensg[all_ids])]), all_ids)
   } else {
     tryCatch(suppressMessages(
-      AnnotationDbi::mapIds(org.Hs.eg.db, keys = all_ids,
+      AnnotationDbi::mapIds(ORGDB, keys = all_ids,
                             column = "SYMBOL", keytype = id_type,
                             multiVals = "first")),
       error = function(e) { message("  org.Hs.eg.db failed: ", e$message); NULL })
@@ -964,7 +972,7 @@ if (!go_ok) {
     )
     if (id_type == "ENTREZID") return(keys)
     tryCatch(suppressMessages(as.character(na.omit(unique(
-      AnnotationDbi::mapIds(org.Hs.eg.db, keys = keys,
+      AnnotationDbi::mapIds(ORGDB, keys = keys,
                             column = "ENTREZID", keytype = id_type,
                             multiVals = "first"))))),
       error = function(e) { message("  mapIds failed: ", e$message); character(0) })
@@ -978,7 +986,7 @@ if (!go_ok) {
     message("  GO: ", direction_label, " | ", length(use_genes), " genes")
     ego <- tryCatch(
       clusterProfiler::enrichGO(
-        gene = use_genes, universe = use_bg, OrgDb = org.Hs.eg.db,
+        gene = use_genes, universe = use_bg, OrgDb = ORGDB,
         keyType = "ENTREZID", ont = "BP", pAdjustMethod = "BH",
         pvalueCutoff = 0.05, qvalueCutoff = 0.2, readable = TRUE),
       error = function(e) { message("  enrichGO failed: ", e$message); NULL })
@@ -999,6 +1007,9 @@ if (!go_ok) {
   plot_go_single <- function(ego_df, direction_label, fill_color, stem) {
     if (is.null(ego_df) || nrow(ego_df) == 0) return(NULL)
     top <- ego_df |> dplyr::arrange(p.adjust) |> dplyr::slice_head(n = 25) |>
+      dplyr::mutate(Description = factor(Description, levels = rev(Description)))
+    top <- top |>
+      dplyr::distinct(Description, .keep_all = TRUE) |>
       dplyr::mutate(Description = factor(Description, levels = rev(Description)))
     p <- ggplot(top, aes(x = gene_ratio_num, y = Description,
                           size = Count, color = neg_log10_padj)) +
