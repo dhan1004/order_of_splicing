@@ -13,16 +13,27 @@
 #
 # Per-species intron TSVs already carry their own gene_symbol column
 # (human -> gene_symbol matches human_symbol; mouse -> gene_symbol matches
-#  mouse_symbol). No BED lookup needed.
+#  mouse_symbol).
+#
+# GENE BACKBONE: as in viz_gene_splicing.R, the exon/intron backbone is drawn
+# from the species' GENCODE introns BED (NOT reconstructed from the observed
+# pairs). Each species gets its own BED (--human-bed / --mouse-bed). For a
+# given gene we intersect its observed pair introns with BED introns to pick
+# the transcript, keep the longest match, and draw that transcript's full
+# intron/exon model. Arcs are then joined onto GENCODE intron indices by
+# coordinate. If no BED is supplied for a species (or no transcript matches),
+# that species falls back to the old reconstruct-from-pairs behaviour.
 #
 # Usage:
 #   Rscript viz_ortholog_splicing.R \
-#     --common   common_genes.tsv \
-#     --human    human_introns.tsv \
-#     --mouse    mouse_introns.tsv \
-#     --outdir   figures/ortho \
-#     --start    1 \
-#     --end      50
+#     --common     common_genes.tsv \
+#     --human      human_introns.tsv \
+#     --mouse      mouse_introns.tsv \
+#     --human-bed  /users/dhan30/reference/hg38.gencode.basic.v43.introns.bed.gz \
+#     --mouse-bed  /users/dhan30/reference/mm39.gencode.basic.vM36.introns.bed.gz \
+#     --outdir     figures/ortho \
+#     --start      1 \
+#     --end        50
 # =============================================================================
 
 suppressPackageStartupMessages({
@@ -31,12 +42,15 @@ suppressPackageStartupMessages({
   library(ggplot2)
   library(patchwork)
   library(scales)
+  library(readr)
 })
 
 # ── Defaults ──────────────────────────────────────────────────────────────────
 COMMON_FILE <- NULL
 HUMAN_FILE  <- NULL
 MOUSE_FILE  <- NULL
+HUMAN_BED   <- NULL
+MOUSE_BED   <- NULL
 OUT_DIR     <- "figures/ortho"
 START_ROW   <- 1L
 END_ROW     <- NA_integer_
@@ -52,12 +66,17 @@ OUT_FORMAT <- "png"
 PER_FILE   <- 4L     # ortholog pairs per PNG (ignored for pdf, which is 1/page)
 DPI        <- 150L
 
+# Terminal exon stub length (bp) when drawing exon boxes off GENCODE introns.
+EXON_STUB <- 200
+
 # ── CLI ───────────────────────────────────────────────────────────────────────
 args <- commandArgs(trailingOnly = TRUE)
 getarg <- function(flag) { i <- which(args == flag); if (length(i) && i < length(args)) args[i + 1] else NULL }
 if (!is.null(v <- getarg("--common")))  COMMON_FILE <- v
 if (!is.null(v <- getarg("--human")))   HUMAN_FILE  <- v
 if (!is.null(v <- getarg("--mouse")))   MOUSE_FILE  <- v
+if (!is.null(v <- getarg("--human-bed"))) HUMAN_BED <- v
+if (!is.null(v <- getarg("--mouse-bed"))) MOUSE_BED <- v
 if (!is.null(v <- getarg("--outdir")))  OUT_DIR     <- v
 if (!is.null(v <- getarg("--start")))   START_ROW   <- as.integer(v)
 if (!is.null(v <- getarg("--end")))     END_ROW     <- as.integer(v)
@@ -129,6 +148,156 @@ mouse_raw <- prep(mouse_raw, MOUSE_SYMBOL_COL)
 human_by_gene <- split(human_raw, human_raw$gene_symbol)
 mouse_by_gene <- split(mouse_raw, mouse_raw$gene_symbol)
 
+# ─────────────────────────────────────────────────────────────────────────────
+# GENCODE introns BED loading (per species)
+# ─────────────────────────────────────────────────────────────────────────────
+# Each BED row is one intron:
+#   col1 chr, col2 start(0-based), col3 end, col4 name=<tx>_intron_<n>_...,
+#   col5 score(ignored), col6 strand.
+# name format (UCSC/bedparse style):
+#   <transcript>_intron_<num>_<count>_<chr>_<start1based>_<f|r>
+# e.g. ENSMUST00000070533.5_intron_1_0_chr1_3287192_r
+# The intron number is the field IMMEDIATELY after "_intron_", NOT the tail.
+# The transcript base may itself contain no "_intron_", so anchor on the first.
+# intron_num is 1-based, transcription-order (documented convention): on minus
+# strand it DECREASES as genomic coordinate increases.
+parse_bed_name <- function(nm) {
+  m <- regmatches(nm, regexec("^(.*?)_intron_(\\d+)_", nm))
+  tx  <- vapply(m, function(x) if (length(x) == 3) x[2] else NA_character_, "")
+  num <- vapply(m, function(x) if (length(x) == 3) as.integer(x[3]) else NA_integer_, 0L)
+  list(tx = tx, intron_num = num)
+}
+
+load_intron_bed <- function(path, label) {
+  if (is.null(path)) {
+    message("  No ", label, " BED supplied; backbone reconstructed from pairs.")
+    return(NULL)
+  }
+  if (!file.exists(path)) {
+    warning(label, " BED not found: ", path,
+            " — backbone reconstructed from pairs.")
+    return(NULL)
+  }
+  message("Loading ", label, " GENCODE introns BED: ", path)
+  bed <- read_tsv(
+    path,
+    col_names = c("chr", "start", "end", "name", "score", "strand"),
+    col_types = cols(chr = "c", start = "i", end = "i",
+                     name = "c", score = "c", strand = "c"),
+    comment = "#", progress = FALSE
+  )
+  pn <- parse_bed_name(bed$name)
+  bed$transcript <- pn$tx
+  bed$intron_num <- pn$intron_num
+  bed <- bed[!is.na(bed$transcript), ]
+  message("  ", label, " BED: ", nrow(bed), " introns across ",
+          length(unique(bed$transcript)), " transcripts.")
+  bed
+}
+
+human_bed <- load_intron_bed(HUMAN_BED, "human")
+mouse_bed <- load_intron_bed(MOUSE_BED, "mouse")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Build the GENCODE backbone (introns + exons) for one gene, from a species BED.
+# Returns NULL if no BED / no transcript matches this gene's observed introns,
+# in which case the caller falls back to reconstruct-from-pairs.
+# ─────────────────────────────────────────────────────────────────────────────
+build_backbone_from_bed <- function(gdf, bed, gene_name) {
+  if (is.null(bed) || is.null(gdf) || nrow(gdf) == 0) return(NULL)
+
+  # Observed introns for this gene (both members of each pair).
+  gene_chr <- unique(gdf$chr)
+  if (length(gene_chr) != 1)
+    gene_chr <- names(sort(table(gdf$chr), decreasing = TRUE))[1]
+
+  obs_introns <- bind_rows(
+    gdf %>% transmute(start = intron1_start, end = intron1_end),
+    gdf %>% transmute(start = intron2_start, end = intron2_end)
+  ) %>% distinct()
+
+  bed_chr <- bed %>% filter(chr == gene_chr)
+  if (nrow(bed_chr) == 0) return(NULL)
+
+  # A transcript "belongs" to this gene if any BED intron coincides (exact,
+  # then ±1 tolerance to absorb 0-/1-based convention differences) with an
+  # observed intron.
+  match_tx <- function(tol) {
+    bed_chr %>%
+      rowwise() %>%
+      mutate(hit = any(abs(start - obs_introns$start) <= tol &
+                       abs(end   - obs_introns$end)   <= tol)) %>%
+      ungroup() %>%
+      filter(hit) %>%
+      pull(transcript) %>%
+      unique()
+  }
+  cand_tx <- match_tx(0L)
+  if (length(cand_tx) == 0) cand_tx <- match_tx(1L)
+  if (length(cand_tx) == 0) return(NULL)
+
+  # Longest transcript = widest (min start, max end) across its introns.
+  tx_span <- bed_chr %>%
+    filter(transcript %in% cand_tx) %>%
+    group_by(transcript) %>%
+    summarise(lo = min(start), hi = max(end),
+              n_introns = n(), .groups = "drop") %>%
+    mutate(span = hi - lo) %>%
+    arrange(desc(span), desc(n_introns))
+  chosen_tx <- tx_span$transcript[1]
+  message("    ", gene_name, " -> ", length(cand_tx),
+          " candidate transcript(s); using longest: ", chosen_tx,
+          " (", tx_span$n_introns[1], " introns)")
+
+  # Authoritative intron table from GENCODE. Sort by genomic start for plotting;
+  # keep intron_num as the TRUE index (correct on minus strand).
+  introns_tbl <- bed_chr %>%
+    filter(transcript == chosen_tx) %>%
+    transmute(start, end, strand,
+              intron_num,
+              mid = (start + end) / 2,
+              length = end - start) %>%
+    arrange(start) %>%
+    mutate(number = intron_num)
+  gene_strand <- introns_tbl$strand[1]
+
+  # Exons = gaps between consecutive GENCODE introns (+ terminal stubs).
+  introns_sorted <- introns_tbl %>% arrange(start)
+  exons_internal <- if (nrow(introns_sorted) >= 2) {
+    tibble(
+      start = introns_sorted$end[-nrow(introns_sorted)],
+      end   = introns_sorted$start[-1]
+    ) %>% filter(end > start)
+  } else tibble(start = numeric(), end = numeric())
+
+  exons_all <- bind_rows(
+    tibble(start = min(introns_sorted$start) - EXON_STUB,
+           end   = min(introns_sorted$start)),
+    exons_internal,
+    tibble(start = max(introns_sorted$end),
+           end   = max(introns_sorted$end) + EXON_STUB)
+  ) %>%
+    arrange(start) %>%
+    mutate(
+      mid          = (start + end) / 2,
+      genomic_rank = row_number(),
+      number       = if (identical(gene_strand, "-"))
+                       (n() - genomic_rank + 1L) else genomic_rank,
+      constitutive = genomic_rank > 1 & genomic_rank < n()
+    )
+
+  # Warn if observed pairs reference introns absent from the chosen transcript
+  # (their arcs will be dropped by the coordinate join in build_gene_panel).
+  obs_keys <- unique(paste(obs_introns$start, obs_introns$end))
+  bed_keys <- unique(paste(introns_tbl$start, introns_tbl$end))
+  n_unmatched <- sum(!obs_keys %in% bed_keys)
+  if (n_unmatched > 0)
+    message("    NOTE: ", n_unmatched, " observed intron(s) not in ",
+            chosen_tx, "; their arcs will be skipped.")
+
+  list(introns = introns_tbl, exons = exons_all, strand = gene_strand)
+}
+
 # ── Gene-function blurbs (optional) ──────────────────────────────────────────
 blurb_lookup <- function(symbol, species) ""   # default no-op
 if (!is.null(BLURB_FILE) && file.exists(BLURB_FILE)) {
@@ -172,10 +341,12 @@ message(sprintf("Plotting pairs %d..%d of %d", START_ROW, END_ROW, n_total))
 
 # =============================================================================
 # Build one gene panel from that gene's intron-pair rows.
-# Reconstructs the exon/intron backbone from intron coordinates and draws a
-# significance-coloured arc per informative pair.
+# Backbone comes from the species' GENCODE BED (via build_backbone_from_bed);
+# if that returns NULL, the exon/intron backbone is reconstructed from the
+# observed intron coordinates (legacy behaviour). Arcs are drawn per
+# informative pair, coloured by direction.
 # =============================================================================
-build_gene_panel <- function(gdf, gene_name, species_label, blurb="") {
+build_gene_panel <- function(gdf, gene_name, species_label, bed = NULL, blurb = "") {
 
   if (is.null(gdf) || nrow(gdf) == 0) {
     return(
@@ -188,24 +359,33 @@ build_gene_panel <- function(gdf, gene_name, species_label, blurb="") {
     )
   }
 
-  # Assemble the unique intron set from both members of each pair.
-  introns <- bind_rows(
-    gdf %>% transmute(start = intron1_start, end = intron1_end),
-    gdf %>% transmute(start = intron2_start, end = intron2_end)
-  ) %>%
-    distinct() %>%
-    arrange(start) %>%
-    mutate(number = row_number(), mid = (start + end) / 2)
+  # ── Backbone: GENCODE if available, else reconstruct from pairs ─────────────
+  bb <- build_backbone_from_bed(gdf, bed, gene_name)
 
-  gene_lo <- min(introns$start)
-  gene_hi <- max(introns$end)
+  if (!is.null(bb)) {
+    introns <- bb$introns            # has: start, end, number (intron_num), mid
+    exons   <- bb$exons              # has: start, end, number, mid
+  } else {
+    # Legacy: assemble unique intron set from both members of each pair.
+    introns <- bind_rows(
+      gdf %>% transmute(start = intron1_start, end = intron1_end),
+      gdf %>% transmute(start = intron2_start, end = intron2_end)
+    ) %>%
+      distinct() %>%
+      arrange(start) %>%
+      mutate(number = row_number(), mid = (start + end) / 2)
 
-  # Exons = the gaps flanking/between introns (approximate model).
-  bnds <- sort(unique(c(introns$start, introns$end)))
-  exons <- tibble(start = c(gene_lo, bnds), end = c(bnds, gene_hi)) %>%
-    filter(end > start) %>%
-    anti_join(introns, by = c("start", "end")) %>%
-    mutate(mid = (start + end) / 2, number = row_number())
+    gene_lo <- min(introns$start)
+    gene_hi <- max(introns$end)
+    bnds <- sort(unique(c(introns$start, introns$end)))
+    exons <- tibble(start = c(gene_lo, bnds), end = c(bnds, gene_hi)) %>%
+      filter(end > start) %>%
+      anti_join(introns, by = c("start", "end")) %>%
+      mutate(mid = (start + end) / 2, number = row_number())
+  }
+
+  gene_lo <- min(exons$start, introns$start)
+  gene_hi <- max(exons$end,   introns$end)
 
   # Direction per pair (fallback if no 'direction' column present).
   if (!"direction" %in% names(gdf)) {
@@ -255,7 +435,7 @@ build_gene_panel <- function(gdf, gene_name, species_label, blurb="") {
                     ylim = c(-0.6, 1.0), clip = "off") +
     scale_x_continuous(labels = function(x) paste0(round(x / 1e3, 1), " kb"),
                        expand = c(0, 0)) +
-    labs(title = paste0(species_label, ": ", gene_name), 
+    labs(title = paste0(species_label, ": ", gene_name),
       subtitle = wrap_blurb(blurb, width = 180),
       x = NULL, y = NULL) +
     theme_classic(base_size = 10) +
@@ -289,14 +469,17 @@ legend_plot <- ggplot(legend_df, aes(x, y, colour = bias)) +
 
 # =============================================================================
 # Build one stacked panel (mouse over human) per ortholog pair.
+# Each species draws its backbone from its own GENCODE BED.
 # =============================================================================
 build_pair_panel <- function(hs, ms) {
   hdf <- human_by_gene[[hs]]
   mdf <- mouse_by_gene[[ms]]
   if (is.null(hdf) && is.null(mdf)) return(NULL)   # signal: skip
 
-  p_mouse <- build_gene_panel(mdf, ms, "Mouse", blurb_lookup(ms, "mouse"))
-  p_human <- build_gene_panel(hdf, hs, "Human", blurb_lookup(hs, "human"))
+  p_mouse <- build_gene_panel(mdf, ms, "Mouse", bed = mouse_bed,
+                              blurb = blurb_lookup(ms, "mouse"))
+  p_human <- build_gene_panel(hdf, hs, "Human", bed = human_bed,
+                              blurb = blurb_lookup(hs, "human"))
 
   (p_mouse / p_human) +
     plot_layout(heights = c(1, 1)) +

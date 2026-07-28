@@ -14,6 +14,12 @@
 # handles a contiguous CHUNK of rows from the common-genes TSV and writes ONE
 # multi-page PDF (one page per ortholog pair).
 #
+# Gene backbones are drawn from each species' GENCODE introns BED (same
+# reference files used elsewhere in the pipeline), NOT reconstructed from the
+# observed pairs:
+#   human: hg38.gencode.basic.v43.introns.bed.gz
+#   mouse: mm39.gencode.basic.vM36.introns.bed.gz
+#
 # --- Sizing the array -------------------------------------------------------
 #   N_pairs = number of lines in COMMON_TSV
 #   CHUNK   = pairs per task (below)
@@ -38,8 +44,10 @@ set -euo pipefail
 COMMON_TSV=/users/dhan30/splicing_order/results/ortholog/ortholog_matched_genes.tsv
 HUMAN_TSV=/users/dhan30/splicing_order/results/ortholog/human_subset_pairs.tsv
 MOUSE_TSV=/users/dhan30/splicing_order/results/ortholog/mouse_subset_pairs.tsv
+HUMAN_BED=/users/dhan30/reference/hg38.gencode.basic.v43.introns.bed.gz
+MOUSE_BED=/users/dhan30/reference/mm39.gencode.basic.vM36.introns.bed.gz
 SCRIPT=/users/dhan30/splicing_order/scripts/figures/viz_ortholog_splicing.R
-OUT_DIR=/users/dhan30/splicing_order/figures/ortholog
+OUT_DIR=/users/dhan30/splicing_order/figures/ortho_0727
 BLURB_TSV=/users/dhan30/splicing_order/results/ortholog/gene_blurbs.tsv
 
 CHUNK=50       # pairs handled per task
@@ -64,15 +72,17 @@ END=$(( START + CHUNK - 1 ))
 echo "[task $TASK] rows ${START}..${END}  (chunk=${CHUNK})"
 
 Rscript "$SCRIPT" \
-  --common "$COMMON_TSV" \
-  --human  "$HUMAN_TSV" \
-  --mouse  "$MOUSE_TSV" \
-  --blurbs "$BLURB_TSV" \
-  --outdir "$OUT_DIR" \
-  --start  "$START" \
-  --end    "$END" \
-  --format "$FORMAT" \
-  --per-png "$PER_PNG" \
-  --dpi    "$DPI"
+  --common    "$COMMON_TSV" \
+  --human     "$HUMAN_TSV" \
+  --mouse     "$MOUSE_TSV" \
+  --human-bed "$HUMAN_BED" \
+  --mouse-bed "$MOUSE_BED" \
+  --blurbs    "$BLURB_TSV" \
+  --outdir    "$OUT_DIR" \
+  --start     "$START" \
+  --end       "$END" \
+  --format    "$FORMAT" \
+  --per-png   "$PER_PNG" \
+  --dpi       "$DPI"
 
 echo "[task $TASK] done"
