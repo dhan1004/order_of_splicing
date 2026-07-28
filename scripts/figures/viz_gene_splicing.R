@@ -12,10 +12,10 @@
 # either file — no separate annotation file is needed.
 #
 # Usage (command line):
-#   Rscript plot_gene_splicing_order.R \
-#       --gene     NBPF10 \
-#       --input    /path/to/significant_pairs.tsv \
-#       --outdir   ./figures
+  # Rscript scripts/figures/viz_gene_splicing.R \
+  #     --gene     Pol1ra \
+  #     --input    results/ortholog/mouse_subset_pairs.tsv \
+  #     --outdir   ./figures
 #
 # Columns used from significant_pairs.tsv:
 #   chr, gene_symbol, intron1_start, intron1_end, intron2_start, intron2_end,
@@ -41,10 +41,23 @@ suppressPackageStartupMessages({
 # SECTION 1: CONFIGURATION
 # ─────────────────────────────────────────────────────────────────────────────
 
-GENE_NAME  <- "FUS"   # ← change to any gene_symbol in your data
+# Point at the species-appropriate introns BED. Switch this (and GENE_BED,
+# if used for symbol mapping) when plotting mouse.
+#   human: /users/dhan30/reference/hg38.gencode.basic.v43.introns.bed.gz
+#   mouse: /users/dhan30/reference/mm39.gencode.basic.vM36.introns.bed.gz
+INTRON_BED <- "/users/dhan30/reference/mm39.gencode.basic.vM36.introns.bed.gz"
+ 
+# The introns BED has no gene symbol. We resolve gene -> transcripts by
+# matching the gene's observed pair coordinates against BED introns, then
+# pick the longest transcript overlapping them. If your BED name field
+# encodes the gene symbol directly, set BED_NAME_HAS_SYMBOL <- TRUE and
+# adjust parse_bed_name() below.
+BED_NAME_HAS_SYMBOL <- TRUE
+
+GENE_NAME  <- "Polr1a"   # ← change to any gene_symbol in your data
 
 # Path to either significant_pairs.tsv, change
-INPUT_FILE <- "/users/dhan30/scratch/splicing_order/figures/0407/significant_pairs.tsv"
+INPUT_FILE <- "results/ortholog/mouse_subset_pairs.tsv"
 
 # Output directory (created if needed)
 OUT_DIR <- "figures/gene_structures"
@@ -92,12 +105,6 @@ if (!"intron1_length" %in% names(raw))
 if (!"intron2_length" %in% names(raw))
   raw$intron2_length <- raw$intron2_end - raw$intron2_start
 
-# ── Add gene_symbol if missing (pooled TSV path) ─────────────────────────────
-if (!"gene_symbol" %in% names(raw)) {
-  raw$gene_id <- sub("\\.\\d+$", "", raw$gene_id)
-
-  gene_symbols <- NULL
-
   # coordinate-based BED lookup
   if (!is.null(GENE_BED) && file.exists(GENE_BED)) {
     message("  Mapping gene symbols via BED: ", GENE_BED)
@@ -122,12 +129,50 @@ if (!"gene_symbol" %in% names(raw)) {
     }
   }
 
+# ── Resolve gene_symbol ──────────────────────────────────────────────────────
+# 1. ortholog subset files carry mouse_symbol (or human_symbol); alias it.
+if (!"gene_symbol" %in% names(raw) && "mouse_symbol" %in% names(raw))
+  raw$gene_symbol <- raw$mouse_symbol
+if (!"gene_symbol" %in% names(raw) && "human_symbol" %in% names(raw))
+  raw$gene_symbol <- raw$human_symbol
+
+# 2. pooled TSV path: only if we STILL have no symbol AND a gene_id exists.
+if (!"gene_symbol" %in% names(raw) && "gene_id" %in% names(raw)) {
+  raw$gene_id <- sub("\\.\\d+$", "", raw$gene_id)
+
+  gene_symbols <- NULL
+  if (!is.null(GENE_BED) && file.exists(GENE_BED)) {
+    message("  Mapping gene symbols via BED: ", GENE_BED)
+    genes <- tryCatch({
+      g <- read.table(GENE_BED, header = FALSE, sep = "\t",
+                      stringsAsFactors = FALSE, quote = "", comment.char = "#")
+      colnames(g)[1:4] <- c("chr", "start", "end", "gene_symbol")
+      g$start <- as.integer(g$start); g$end <- as.integer(g$end)
+      g[!is.na(g$start), ]
+    }, error = function(e) { message("  BED load failed: ", e$message); NULL })
+
+    if (!is.null(genes)) {
+      genes_by_chr <- split(genes, genes$chr)
+      gene_symbols <- mapply(function(ch, ps, pe) {
+        g <- genes_by_chr[[ch]]
+        if (is.null(g)) return(NA_character_)
+        hits <- g[g$start < pe & g$end > ps, "gene_symbol", drop = TRUE]
+        if (length(hits) > 0) hits[1] else NA_character_
+      }, raw$chr, raw$intron1_start, raw$intron2_end,
+      SIMPLIFY = TRUE, USE.NAMES = FALSE)
+      message("  Mapped: ", sum(!is.na(gene_symbols)), "/", nrow(raw))
+    }
+  }
   raw$gene_symbol <- if (!is.null(gene_symbols))
     ifelse(is.na(gene_symbols) | gene_symbols == "", raw$gene_id, gene_symbols)
-  else
-    raw$gene_id
+  else raw$gene_id
 }
 
+# 3. still nothing? fail loudly instead of subsetting a closure later.
+if (!"gene_symbol" %in% names(raw))
+  stop("No gene_symbol / mouse_symbol / human_symbol / gene_id column in ",
+       INPUT_FILE, ".\n  Columns present: ",
+       paste(colnames(raw), collapse = ", "))
 # ─────────────────────────────────────────────────────────────────────────────
 # SECTION 3: SUBSET TO TARGET GENE
 # ─────────────────────────────────────────────────────────────────────────────
@@ -157,50 +202,158 @@ if (nrow(df_gene_sig) == 0)
 # Each TSV row is an intron pair. Collect all unique individual introns,
 # then infer exon positions as the gaps between consecutive introns.
 
-introns_tbl <- df_gene_all %>%
-  select(intron1_start, intron1_end, intron2_start, intron2_end) %>%
-  pivot_longer(everything(),
-               names_to  = c("which", ".value"),
-               names_pattern = "(intron[12])_(start|end)") %>%
-  distinct(start, end) %>%
-  arrange(start) %>%
-  mutate(
-    number = row_number(),
-    mid    = (start + end) / 2,
-    length = end - start
-  )
-
-message("  Unique introns reconstructed: ", nrow(introns_tbl))
-
-# Terminal exon stubs (display-only flanking regions)
-EXON_STUB <- 200
-
-exons_internal <- if (nrow(introns_tbl) >= 2) {
-  tibble(
-    start  = introns_tbl$end[-nrow(introns_tbl)],
-    end    = introns_tbl$start[-1],
-    number = seq_len(nrow(introns_tbl) - 1) + 1L
-  ) %>% filter(end > start)
-} else {
-  tibble(start = numeric(), end = numeric(), number = integer())
+# The backbone now comes from GENCODE. Each BED row is one intron:
+#   col1 chr, col2 start(0-based), col3 end, col4 name=<tx>_intron_<n>,
+#   col5 score(ignored), col6 strand.
+# intron_num in the name is 1-based, transcription-order (your documented
+# convention): on minus strand it DEcreASES as genomic coordinate increases.
+ 
+suppressPackageStartupMessages({
+  library(readr)
+})
+ 
+message("  Loading GENCODE introns BED: ", INTRON_BED)
+stopifnot(file.exists(INTRON_BED))
+ 
+bed <- read_tsv(
+  INTRON_BED,
+  col_names = c("chr", "start", "end", "name", "score", "strand"),
+  col_types = cols(chr = "c", start = "i", end = "i",
+                   name = "c", score = "c", strand = "c"),
+  comment = "#", progress = FALSE
+)
+ 
+# name format (UCSC/bedparse style):
+#   <transcript>_intron_<num>_<count>_<chr>_<start1based>_<f|r>
+# e.g. ENSMUST00000070533.5_intron_1_0_chr1_3287192_r
+# The intron number is the field IMMEDIATELY after "_intron_", NOT the tail.
+# The transcript base may itself contain no "_intron_", so anchor on the first.
+parse_bed_name <- function(nm) {
+  m <- regmatches(nm, regexec("^(.*?)_intron_(\\d+)_", nm))
+  tx  <- vapply(m, function(x) if (length(x) == 3) x[2] else NA_character_, "")
+  num <- vapply(m, function(x) if (length(x) == 3) as.integer(x[3]) else NA_integer_, 0L)
+  list(tx = tx, intron_num = num)
 }
+pn <- parse_bed_name(bed$name)
+bed$transcript <- pn$tx
+bed$intron_num <- pn$intron_num
+bed <- bed[!is.na(bed$transcript), ]
 
+# ── Resolve this gene to a set of candidate transcripts ─────────────────────
+# We don't have a symbol column in the BED, so intersect the gene's observed
+# pair introns (from df_gene_all) with BED introns to find which transcripts
+# this gene lives on, then keep the LONGEST (max genomic span ≈ UCSC default).
+gene_chr <- unique(df_gene_all$chr)
+if (length(gene_chr) != 1) {
+  # pick the modal chr defensively
+  gene_chr <- names(sort(table(df_gene_all$chr), decreasing = TRUE))[1]
+}
+ 
+obs_introns <- df_gene_all %>%
+  transmute(a1 = intron1_start, b1 = intron1_end,
+            a2 = intron2_start, b2 = intron2_end) %>%
+  { bind_rows(select(., start = a1, end = b1),
+              select(., start = a2, end = b2)) } %>%
+  distinct()
+ 
+bed_chr <- bed %>% filter(chr == gene_chr)
+ 
+# A transcript "belongs" to this gene if any of its BED introns coincides
+# (exact coordinate match, allowing the BED 0-based vs data convention offset)
+# with an observed intron. Try exact match first; if nothing matches, retry
+# with a ±1 tolerance on start to absorb 0-/1-based differences.
+match_tx <- function(tol) {
+  bed_chr %>%
+    rowwise() %>%
+    mutate(hit = any(abs(start - obs_introns$start) <= tol &
+                     abs(end   - obs_introns$end)   <= tol)) %>%
+    ungroup() %>%
+    filter(hit) %>%
+    pull(transcript) %>%
+    unique()
+}
+cand_tx <- match_tx(0L)
+if (length(cand_tx) == 0) cand_tx <- match_tx(1L)
+if (length(cand_tx) == 0)
+  stop("No GENCODE transcript on ", gene_chr,
+       " matched any observed intron for ", GENE_NAME,
+       ". Check INTRON_BED build/coordinate convention.")
+ 
+# Longest transcript = widest (min start, max end) across its introns.
+tx_span <- bed_chr %>%
+  filter(transcript %in% cand_tx) %>%
+  group_by(transcript) %>%
+  summarise(lo = min(start), hi = max(end),
+            n_introns = n(), .groups = "drop") %>%
+  mutate(span = hi - lo) %>%
+  arrange(desc(span), desc(n_introns))
+ 
+chosen_tx <- tx_span$transcript[1]
+message("  Gene ", GENE_NAME, " -> ", length(cand_tx),
+        " candidate transcript(s); using longest: ", chosen_tx,
+        " (", tx_span$n_introns[1], " introns, span ",
+        tx_span$span[1], " bp)")
+ 
+# ── Authoritative intron table from GENCODE, ordered by transcription ───────
+# Keep BED intron_num as the TRUE index. Sort by genomic start for plotting,
+# but preserve intron_num for labels so numbering matches the browser and is
+# correct on minus-strand transcripts.
+introns_tbl <- bed_chr %>%
+  filter(transcript == chosen_tx) %>%
+  transmute(start, end, strand,
+            intron_num,                 # true GENCODE index (1-based, tx-order)
+            mid = (start + end) / 2,
+            length = end - start) %>%
+  arrange(start) %>%
+  mutate(number = intron_num)           # 'number' drives arc join + labels
+ 
+gene_strand <- introns_tbl$strand[1]
+ 
+message("  Backbone introns from GENCODE: ", nrow(introns_tbl),
+        " (strand ", gene_strand, ")")
+ 
+# ── Exons = gaps between consecutive GENCODE introns (+ terminal stubs) ──────
+EXON_STUB <- 200
+ 
+introns_sorted <- introns_tbl %>% arrange(start)
+ 
+exons_internal <- if (nrow(introns_sorted) >= 2) {
+  tibble(
+    start = introns_sorted$end[-nrow(introns_sorted)],
+    end   = introns_sorted$start[-1]
+  ) %>% filter(end > start)
+} else tibble(start = numeric(), end = numeric())
+ 
+# Exon numbering in transcription order: on + strand exon 1 is leftmost;
+# on - strand exon 1 is rightmost. We number left->right then flip labels
+# for minus strand so they read like the browser.
 exons_all <- bind_rows(
-  tibble(start = min(introns_tbl$start) - EXON_STUB,
-         end   = min(introns_tbl$start),
-         number = 1L),
+  tibble(start = min(introns_sorted$start) - EXON_STUB,
+         end   = min(introns_sorted$start)),
   exons_internal,
-  tibble(start = max(introns_tbl$end),
-         end   = max(introns_tbl$end) + EXON_STUB,
-         number = nrow(introns_tbl) + 1L)
+  tibble(start = max(introns_sorted$end),
+         end   = max(introns_sorted$end) + EXON_STUB)
 ) %>%
   arrange(start) %>%
   mutate(
-    mid = (start + end) / 2,
-    # Constitutive = internal exon flanked on both sides by observed introns.
-    # Terminal stubs (first and last exon) are treated as non-constitutive.
-    constitutive = number > 1 & number < max(number)
+    mid          = (start + end) / 2,
+    genomic_rank = row_number(),
+    number       = if (identical(gene_strand, "-"))
+                     (n() - genomic_rank + 1L) else genomic_rank,
+    constitutive = genomic_rank > 1 & genomic_rank < n()
   )
+ 
+# ── Warn if observed pairs reference introns absent from chosen transcript ──
+# (These arcs will be dropped by the coordinate join in build_arcs — surfacing
+# it here prevents silent loss.)
+obs_keys <- unique(paste(obs_introns$start, obs_introns$end))
+bed_keys <- unique(paste(introns_tbl$start, introns_tbl$end))
+n_unmatched <- sum(!obs_keys %in% bed_keys)
+if (n_unmatched > 0)
+  message("  NOTE: ", n_unmatched, " observed intron(s) not in chosen ",
+          "transcript ", chosen_tx, "; their arcs will be skipped. ",
+          "If this is high, the gene's reads may favour a different isoform ",
+          "than the longest transcript.")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SECTION 5: BUILD ARC DATA
