@@ -1,9 +1,9 @@
 #!/bin/bash
 set -uo pipefail
 
-INPUT_TSV="/users/dhan30/splicing_order/data/mouse_gsm_sra_list_for_pipeline_3t3.tsv"
-OUTPUT_TSV="/users/dhan30/splicing_order/data/mouse_gsm_sra_list_paired_only.tsv"
-FAILED_TSV="/users/dhan30/splicing_order/data/mouse_gsm_check_failed.tsv"
+INPUT_TSV="/users/dhan30/splicing_order/data/gsm_sra_list_for_pipeline_hek293.tsv"
+OUTPUT_TSV="/users/dhan30/splicing_order/data/hek293_paired_only.tsv"
+FAILED_TSV="/users/dhan30/splicing_order/data/hek293_check_failed.tsv"
 TEMP_DIR="/users/dhan30/scratch/splicing_order/data/temp_check"
 
 mkdir -p "$TEMP_DIR"

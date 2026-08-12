@@ -13,13 +13,13 @@ if __name__ == '__main__':
 
 	project_dir = '/users/dhan30/splicing_order'
 	data_dir = join(project_dir, 'data')
-	gse_xml_hdf5_path = join(data_dir, 'mouse_expression_profiling_by_HT_seq_gds_metadata.hdf5')
-	gse_xml_hdf5_indices_path = join(data_dir, 'mouse_expression_profiling_by_HT_seq_gds_metadata_indices_3t3.txt')
-	gse_candidates_file = join(data_dir, 'mouse_GSE_candidates_3t3.txt.gz')
-	gse_candidates_sample_metadata_file = join(data_dir, f'mouse_gene_perturbation_GSE_candidates_sample_metadata_3t3.hdf5')
-	gse_candidates_sample_info_file = join(data_dir, f'mouse_gene_perturbation_GSE_candidates_sample_title_characteristics_3t3.txt.gz')
-	gsm_sra_pipeline_file = join(data_dir, 'mouse_gsm_sra_list_for_pipeline_3t3.tsv')
-	sra_gsm_table = join(data_dir, 'SRA_GSM_accessions.txt.gz')
+	gse_xml_hdf5_path = join('/oscar/data/wfairbro/dhan30/splicing_order/data/human_expression_profiling_by_HT_seq_gds_metadata.hdf5')
+	gse_xml_hdf5_indices_path = join('/oscar/data/wfairbro/dhan30/splicing_order/data/human_expression_profiling_by_HT_seq_gds_metadata_indices_hek293.txt')
+	gse_candidates_file = join('/oscar/data/wfairbro/dhan30/splicing_order/data/human_GSE_candidates_hek293.txt.gz')
+	gse_candidates_sample_metadata_file = join(data_dir, f'human_gene_perturbation_GSE_candidates_sample_metadata_hek293.hdf5')
+	gse_candidates_sample_info_file = join(data_dir, f'human_gene_perturbation_GSE_candidates_sample_title_characteristics_hek293.txt.gz')
+	gsm_sra_pipeline_file = join(data_dir, 'gsm_sra_list_for_pipeline_hek293.tsv')
+	sra_gsm_table = join('/oscar/data/wfairbro/dhan30/splicing_order/data/SRA_GSM_accessions.txt.gz')
 
 	# Parse the association between GSE ID and the index of its metadata string in the original hdf5 file
 	gse_indices = {}

@@ -10,7 +10,7 @@
 #SBATCH --partition=batch
 
 # Configuration
-INPUT_LIST_TSV="/users/dhan30/splicing_order/data/mouse_gsm_sra_list_paired_only.tsv"
+INPUT_LIST_TSV="/users/dhan30/splicing_order/data/hek293_paired_only.tsv"
 THREADS=16 
 BASE_OUT_DIR="/users/dhan30/scratch/data/results"
 PIPELINE_SCRIPT="/users/dhan30/splicing_order/scripts/order_gse_filtering.sh"

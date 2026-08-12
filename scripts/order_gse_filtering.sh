@@ -44,9 +44,9 @@ informative_pairs_bam="${out_dir}/${gsm_id}_informative_pairs.bam"
 splicing_order_output="${out_dir}/${gsm_id}_pairwise_splicing_order.tsv"
 
 # Reference files
-reference_genome_dir="/users/dhan30/reference/mm39"
-reference_genome_fasta="/users/dhan30/reference/mm39.fa"
-intron_bed_file="/users/dhan30/reference/mm39.gencode.basic.vM36.introns.bed.gz"
+reference_genome_dir="/users/dhan30/reference/hg38"
+reference_genome_fasta="/users/dhan30/reference/hg38.fa"
+intron_bed_file="/users/dhan30/reference/hg38.gencode.basic.v43.introns.bed.gz"
 
 # Script directory
 SCRIPT_DIR="/users/dhan30/splicing_order/scripts"
@@ -333,6 +333,24 @@ if [ "$skip_to_structure" = false ]; then
         --tolerance 10 \
         --max-intron-length 15000 ||
         { printf "ERROR: Splicing order analysis failed\n"; exit 1; }
+
+    pairwise_spanning_output="${out_dir}/${gsm_id}_pairwise_spanning.tsv"
+ 
+    printf "$(date +'%d/%b/%Y %H:%M:%S') | Measuring pairwise 5'ss/3'ss spanning...\n"
+    
+    python3 "${SCRIPT_DIR}/pairwise_splice_site_spanning.py" \
+        --bam "${informative_pairs_bam}" \
+        --intron-bed "${intron_bed_file}" \
+        --output "${pairwise_spanning_output}" \
+        --min-mapq 10 \
+        --tolerance 10 \
+        --k 10 ||
+        { printf "WARNING: pairwise spanning failed for %s (continuing)\n" "${gsm_id}"; }
+    
+    if [ -f "${pairwise_spanning_output}" ]; then
+        n_span=$(tail -n +2 "${pairwise_spanning_output}" | wc -l)
+        printf "$(date +'%d/%b/%Y %H:%M:%S') | Pairwise spanning written: %d pair rows.\n" "${n_span}"
+    fi
 
      # delete informative pairs BAM to save disk space, just keep tsv
     printf "$(date +'%d/%b/%Y %H:%M:%S') | Deleting informative pairs BAM to save disk...\n"
